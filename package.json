@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Thin bridge from chat channels to Grok Bots. Feishu first.",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=22"
