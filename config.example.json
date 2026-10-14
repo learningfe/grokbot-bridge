@@ -1,0 +1,40 @@
+{
+  "feishu": {
+    "appIdEnv": "FEISHU_APP_ID",
+    "appSecretEnv": "FEISHU_APP_SECRET",
+    "domain": "feishu",
+    "botOpenId": ""
+  },
+  "ownerOpenId": "ou_your_open_id",
+  "allow": {
+    "users": ["ou_person"],
+    "trustedUsers": ["ou_closer_person"],
+    "chats": ["oc_group"],
+    "trustedBots": ["ou_other_bot_open_id"]
+  },
+  "routes": {
+    "dm:ou_person": "alpha",
+    "group:oc_group": "alpha",
+    "thread:omt_topic": "beta"
+  },
+  "defaultBot": "alpha",
+  "bots": {
+    "alpha": {
+      "webhookUrl": "https://example.invalid/grok/alpha/webhook",
+      "webhookKeyEnv": "GROK_ALPHA_KEY"
+    },
+    "beta": {
+      "webhookUrl": "https://example.invalid/grok/beta/webhook",
+      "webhookKeyEnv": "GROK_BETA_KEY"
+    }
+  },
+  "http": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "tokenEnv": "GROKBOT_BRIDGE_TOKEN"
+  },
+  "dataDir": "data",
+  "deliveryTimeoutMs": 900000,
+  "maxBotExchanges": 5,
+  "contextMessages": 8
+}
