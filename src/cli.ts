@@ -4,7 +4,7 @@ import { feishuUuid, isFeishuUuid } from "./uuid.js";
 const HELP = `grokbot-bridge serve --config <file>
 grokbot-bridge reply <event_id> --text <text> [--uuid <id>]
 grokbot-bridge noreply <event_id>
-grokbot-bridge send --to <open_id|chat_id> --text <text> [--uuid <id>]
+grokbot-bridge send --to <open_id|chat_id|wechat_user_id> --text <text> [--uuid <id>]
 grokbot-bridge react <message_id> <emoji>
 
 The CLI talks to the bridge HTTP API on GROKBOT_BRIDGE_URL (default http://127.0.0.1:8787).

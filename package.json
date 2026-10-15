@@ -2,7 +2,7 @@
   "name": "grokbot-bridge",
   "version": "0.1.0",
   "private": true,
-  "description": "Thin bridge from chat channels to Grok Bots. Feishu first.",
+  "description": "Thin bridge from Feishu and WeChat to Grok Bots.",
   "license": "MIT",
   "type": "module",
   "engines": {
