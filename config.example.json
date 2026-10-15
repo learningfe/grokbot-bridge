@@ -12,10 +12,20 @@
     "chats": ["oc_group"],
     "trustedBots": ["ou_other_bot_open_id"]
   },
+  "wechat": {
+    "credentialsFile": "~/.config/weixin-cli/credentials.json",
+    "ownerUserId": "your_user@im.wechat",
+    "allow": {
+      "users": [],
+      "trustedUsers": [],
+      "trustedBots": []
+    }
+  },
   "routes": {
     "dm:ou_person": "alpha",
     "group:oc_group": "alpha",
-    "thread:omt_topic": "beta"
+    "thread:omt_topic": "beta",
+    "dm:your_user@im.wechat": "alpha"
   },
   "defaultBot": "alpha",
   "bots": {

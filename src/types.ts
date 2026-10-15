@@ -1,3 +1,5 @@
+export type ChannelName = "feishu" | "wechat";
+
 export type SenderType = "user" | "bot";
 
 export type Trust = "owner" | "trusted_user" | "allowed_user" | "trusted_bot" | "unknown";
@@ -27,7 +29,7 @@ export interface Attachment {
 export interface InboundMessage {
   eventId: string;
   messageId: string;
-  channel: "feishu";
+  channel: ChannelName;
   chatId: string;
   chatType: "p2p" | "group";
   threadId?: string;
@@ -49,7 +51,7 @@ export interface InboundMessage {
 export interface NormalizedEvent {
   id: string;
   messageId: string;
-  channel: "feishu";
+  channel: ChannelName;
   scope: string;
   chatId: string;
   chatType: "p2p" | "group";
@@ -90,7 +92,8 @@ export interface ChannelHandlers {
 }
 
 export interface Channel {
-  readonly name: "feishu";
+  readonly name: ChannelName;
+  /** This channel's own bot id. Feishu open_id, or the iLink bot id for WeChat. */
   readonly botOpenId: string;
   start(handlers: ChannelHandlers): Promise<void>;
   stop(): Promise<void>;
@@ -99,6 +102,8 @@ export interface Channel {
     text: string;
     uuid: string;
     inThread: boolean;
+    /** WeChat replies are addressed by user id; Feishu replies by message id. */
+    to?: string;
   }): Promise<{ messageId: string }>;
   send(input: { to: string; text: string; uuid: string }): Promise<{ messageId: string }>;
   react(input: { messageId: string; emoji: string }): Promise<void>;

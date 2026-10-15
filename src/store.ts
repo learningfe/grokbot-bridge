@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { ChannelName } from "./types.js";
 
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -7,6 +8,10 @@ export interface TrackedEvent {
   messageId: string;
   inThread: boolean;
   at: number;
+  /** Missing on state written before the WeChat channel existed; treat as feishu. */
+  channel: ChannelName;
+  /** WeChat user id to address when replying. Feishu replies by message id. */
+  peerId?: string;
 }
 
 export interface QueueSnapshotScope {
@@ -86,8 +91,20 @@ export class Store {
     return true;
   }
 
-  stageTrack(eventId: string, messageId: string, inThread: boolean, now = Date.now()): void {
-    this.state.tracked[eventId] = { messageId, inThread, at: now };
+  stageTrack(
+    eventId: string,
+    messageId: string,
+    inThread: boolean,
+    now = Date.now(),
+    meta?: { channel?: ChannelName; peerId?: string },
+  ): void {
+    this.state.tracked[eventId] = {
+      messageId,
+      inThread,
+      at: now,
+      channel: meta?.channel ?? "feishu",
+      ...(meta?.peerId ? { peerId: meta.peerId } : {}),
+    };
   }
 
   stageLoop(scope: string, count: number): void {
@@ -192,7 +209,13 @@ function trackedMap(value: unknown): Record<string, TrackedEvent> {
     if (typeof item !== "object" || item === null) continue;
     const row = item as Partial<TrackedEvent>;
     if (typeof row.messageId !== "string" || typeof row.at !== "number") continue;
-    out[key] = { messageId: row.messageId, inThread: row.inThread === true, at: row.at };
+    out[key] = {
+      messageId: row.messageId,
+      inThread: row.inThread === true,
+      at: row.at,
+      channel: row.channel === "wechat" ? "wechat" : "feishu",
+      ...(typeof row.peerId === "string" && row.peerId !== "" ? { peerId: row.peerId } : {}),
+    };
   }
   return out;
 }

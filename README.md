@@ -1,29 +1,29 @@
 # grokbot-bridge
 
-把飞书消息交给 Grok Bot，再把 bot 要发的内容送回飞书。每个用户可以跑多个 bot。桥接很薄：收消息、按会话路由、把 bot 写好的回复发出去。它不记任务、不排跟进、不做 agent。那些在 bot 自己的记忆和 routine 里。
+把飞书和微信消息交给 Grok Bot，再把 bot 要发的内容送回原来的通道。每个用户可以跑多个 bot。桥接很薄：收消息、按会话路由、把 bot 写好的回复发出去。它不记任务、不排跟进、不做 agent。那些在 bot 自己的记忆和 routine 里。
 
 外面的程序没有聊天 API。bot 主人在 Grok Bot 里建一个 webhook routine，从应用里复制 URL 和 sender key。桥接对这个 URL 发 HTTP POST，载荷会作为 `<webhook_event>` 和 routine 里保存的提示词一起交给 bot。POST 返回 200 只表示「已开始」，没有结果回调。bot 和桥接在同一台 Linux 上，bot 用本机 CLI 把要发的内容交回来。
 
-飞书是第一个通道。通道实现集中在 `src/feishu.ts`，对内只暴露 `Channel`。再加 Slack 时实现同一个接口即可，这里没有为它预留空框架。
+通道对内都实现 `Channel`。飞书在 `src/feishu.ts`，微信 iLink 在 `src/wechat.ts`。两条通道共用同一套 scope、trust、去重和队列。配置里没有 `wechat` 时不启微信。
 
 ## 一条消息怎么走
 
 ```
-飞书长连接
+飞书长连接，或微信 getupdates 长轮询
   -> 立刻确认，再异步处理
   -> 用 event id / message id 去重（落盘）
-  -> 只用 open_id + sender_type 判定 trust
-  -> 按允许名单过滤
+  -> 只用平台核实过的发送者 id + sender_type 判定 trust
+  -> 按该通道的允许名单过滤
   -> 同一 scope 上一次 bot 运行没结束就排队，结束后一批送出
   -> POST 到该 scope 对应 bot 的 webhook
 
 bot 调用本机 CLI
   -> 127.0.0.1 上的 HTTP
-  -> 撤回检查、允许名单、飞书幂等 uuid
-  -> 飞书发消息 / 回复 / 表情
+  -> 撤回检查、允许名单、幂等 uuid
+  -> 飞书发消息 / 回复 / 表情，或微信 sendmessage
 ```
 
-scope 有三种：`dm:<open_id>`、`group:<chat_id>`、`thread:<thread_id>`（话题）。路由先看精确 scope，话题没有单独路由时用所在群的路由，再否则用默认 bot。
+scope 有三种：`dm:<发送者 id>`、`group:<chat_id>`、`thread:<thread_id>`（话题）。飞书的发送者 id 是 open_id，微信是 iLink 用户 id。路由先看精确 scope，话题没有单独路由时用所在群的路由，再否则用默认 bot。webhook 载荷里的 `channel` 是 `feishu` 或 `wechat`。
 
 ## 飞书应用
 
@@ -50,19 +50,48 @@ scope 有三种：`dm:<open_id>`、`group:<chat_id>`、`thread:<thread_id>`（�
 
 3 秒内不确认，飞书会重推。处理函数只做解析并把消息交出去，不在里面等待 webhook。
 
+## 微信 iLink
+
+微信走 ClawBot / iLink 的 HTTP 长轮询，不是飞书那种 WebSocket，也不需要公网回调地址。基座是 `https://ilinkai.weixin.qq.com`。登录仍然用本机的 `weixin-cli login`（扫码）。桥接只读它写好的凭证，不保存第二份 token，也不把凭证写进仓库。
+
+凭证文件默认 `~/.config/weixin-cli/credentials.json`（可用 `wechat.credentialsFile` 或环境变量 `WEIXIN_CLI_CONFIG_DIR` 换目录）。里面有 `bot_token`、`ilink_bot_id`（`...@im.bot`）、`ilink_user_id`（扫码的那个人，`...@im.wechat`）和 `baseurl`。文件权限保持 `0600`。
+
+`context_token` 不是用户 id。每条 `sendmessage` 都要带上它，否则微信收不到。它只出现在用户发来的消息里，而且会过期。桥接在每条入站消息上把该用户最新的 token 写进 `context-tokens.json`，格式与 `weixin-cli token get` 相同：
+
+```json
+{
+  "your_user@im.wechat": {
+    "context_token": "...",
+    "updated_at": "2026-10-15T00:00:00.000Z"
+  }
+}
+```
+
+`reply` 和 `send` 在发出去的那一刻读这个文件，不用消息进来时看到的那一版。发出去不会把旧 token 写回去。没有单独的刷新接口。定时提醒如果隔夜再发，token 经常已经失效，微信侧的 errmsg 会是 `prepare failed`。
+
+长轮询游标 `get_updates_buf` 写在同一目录的 `get-updates-buf.json`。这是桥接自己的文件，`weixin-cli` 不读它。同一个 bot 不要再跑第二个 `getupdates` 客户端，消息只会进其中一个。
+
+收到的用户消息在 `message_state` 为完成（`2`）或服务端没给状态时才送进 bot。生成中的半截文本只更新 token，不转发。bot 自己的回声（`message_type=2`）丢掉。协议里有 `group_id`，当前只做单聊：群消息不转发。
+
+微信没有飞书那种表情、撤回、历史和群名接口。`react` 返回 `unsupported`。回复前的撤回检查恒为未撤回。最近上下文为空。
+
+配置示例里的 `wechat` 可以整段删掉，桥接就只跑飞书。`ownerUserId` 不写时，用凭证里的 `ilink_user_id` 当主人。允许名单里的 id 是 iLink id，不是飞书的 `ou_`。微信单聊的 scope 是 `dm:<用户 id>`，可以单独路由。
+
+凭证路径变了要重启。微信允许名单和 `ownerUserId` 随配置文件热重载。
+
 ## 谁的消息会送进 bot
 
-身份只来自事件里的 `open_id` 和 `sender_type`。展示名、正文、`user_id` 字段都不参与。
+身份只来自平台核实过的发送者 id 和类型。飞书是 `open_id` + `sender_type`。微信是 iLink 用户 id（`...@im.wechat`）和消息类型。展示名、正文、`user_id` 字段都不参与。两条通道各用各的主人 id 和允许名单，飞书的 `ou_` 不会被当成微信用户。
 
 转发给 bot 的 `sender.trust`：
 
-| 值             | 条件                                           |
-| -------------- | ---------------------------------------------- |
-| `owner`        | `sender_type=user` 且 open_id 是 `ownerOpenId` |
-| `trusted_user` | 用户，且在 `allow.trustedUsers`                |
-| `allowed_user` | 用户，且在 `allow.users`                       |
-| `trusted_bot`  | bot，且在 `allow.trustedBots`                  |
-| `unknown`      | 其他                                           |
+| 值             | 条件                                                                 |
+| -------------- | -------------------------------------------------------------------- |
+| `owner`        | 用户，且 id 是该通道的主人（飞书 `ownerOpenId`，微信 `ownerUserId`） |
+| `trusted_user` | 用户，且在该通道的 trusted users                                     |
+| `allowed_user` | 用户，且在该通道的 users                                             |
+| `trusted_bot`  | bot，且在该通道的 trusted bots                                       |
+| `unknown`      | 其他                                                                 |
 
 过滤：
 
@@ -79,7 +108,7 @@ scope 有三种：`dm:<open_id>`、`group:<chat_id>`、`thread:<thread_id>`（�
 
 bot 连续发言达到 `maxBotExchanges`（默认 5，第 6 条起）后，这个 scope 不再把 bot 消息送进去，并给主人发一条私聊说明。允许的群里只要有人说话（即使没 @、因此没送进 bot），计数就从 0 重计。通知正文不含对方的消息内容。
 
-主动 `send` 的目标必须是主人、允许名单里的用户或 trusted bot 的 open_id，或允许名单里的 chat_id。其他目标直接拒绝，让 bot 去问主人。展示名不能当目标。
+主动 `send` 的目标必须是主人、允许名单里的用户或 trusted bot，或飞书允许名单里的 chat_id。微信目标是 `...@im.wechat` / `...@im.bot`。其他目标直接拒绝，让 bot 去问主人。展示名不能当目标。
 
 回复前会看本地撤回记录，并向飞书再确认一次。已撤回则跳过，不发第二遍。发出去的消息带 uuid，同一次发送的重试复用它。
 
@@ -92,9 +121,9 @@ cp config.example.json ~/.config/grokbot-bridge/config.json
 cp .env.example ~/.config/grokbot-bridge/env
 ```
 
-改掉 open_id、chat_id 和 webhook URL。`http.tokenEnv` 可删；删了就只靠绑定在 `127.0.0.1`。绑到非本机地址时必须设置 token。
+改掉 open_id、chat_id、微信用户 id 和 webhook URL。不用微信时删掉整个 `wechat`。`http.tokenEnv` 可删；删了就只靠绑定在 `127.0.0.1`。绑到非本机地址时必须设置 token。
 
-路由、允许名单、bot webhook、超时和回路上限在配置文件变更后自动重载。飞书凭证、bot open_id、HTTP 地址和端口、token、数据目录变了需要重启进程。
+路由、允许名单、bot webhook、超时和回路上限在配置文件变更后自动重载。飞书凭证、bot open_id、微信凭证路径、HTTP 地址和端口、token、数据目录变了需要重启进程。
 
 每个 bot：
 
@@ -127,12 +156,23 @@ grokbot-bridge reply <event_id> --text "你好"
 grokbot-bridge noreply <event_id>
 grokbot-bridge send --to ou_xxx --text "你好"
 grokbot-bridge send --to oc_xxx --text "大家好"
+grokbot-bridge send --to your_user@im.wechat --text "你好"
 grokbot-bridge react om_xxx THUMBSUP
 ```
 
-`--text -` 从标准输入读正文。重试同一次发送时加上次的 `--uuid`。表情是飞书的类型名，例如 `THUMBSUP`，不是 emoji 字符。
+`--text -` 从标准输入读正文。重试同一次发送时加上次的 `--uuid`。表情是飞书的类型名，例如 `THUMBSUP`，不是 emoji 字符。微信没有表情接口。
 
-成功时 stdout 是一行 JSON，进程退出码 0。拒绝或失败时同样是一行 JSON，退出码 1。`target_not_allowed` 表示目标不在允许名单。`skipped` 为 `recalled` 表示原消息已撤回。`late: true` 表示这条回复发出去了，但该 scope 的队列早已释放（超时或已经回复过）。
+成功时 stdout 是一行 JSON，进程退出码 0。拒绝或失败时同样是一行 JSON，退出码 1。判断分支看 `error`，不要只看退出码。
+
+| `error`                 | HTTP | 含义                                                                                                                                                                       |
+| ----------------------- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `target_not_allowed`    | 403  | 目标不在该通道的允许名单                                                                                                                                                   |
+| `context_token_expired` | 409  | 这个微信用户还没有 `context_token`，或 token 已过期（含微信返回 `prepare failed`）。消息没有发出去。不要立刻重试。改在应用内通知对方，等他们在微信里再发一条消息刷新 token |
+| `session_expired`       | 401  | 微信登录会话过期（iLink `ret=-14`）。在这台机器上重新 `weixin-cli login`。这和 token 过期不是同一件事                                                                      |
+| `unsupported`           | 400  | 这个通道没有该能力（微信的 `react`）                                                                                                                                       |
+| `send_failed`           | 502  | 其他发送失败                                                                                                                                                               |
+
+`context_token_expired` 和 `session_expired` 都表示微信侧没有发出去。`reply` 遇到它们会放开当前 scope 的队列，避免一直占着会话。`skipped` 为 `recalled` 表示飞书原消息已撤回。`late: true` 表示这条回复发出去了，但该 scope 的队列早已释放（超时或已经回复过）。
 
 bot routine 要贴的提示词在 [docs/routine-prompt.md](docs/routine-prompt.md)。
 
@@ -166,4 +206,4 @@ npm run lint
 npm test
 ```
 
-测试覆盖去重、路由、入站过滤、scope 队列、bot 回路上限、主动发送的允许名单，以及 trust 不读展示名和正文。没有接真实飞书或 Grok Bot。
+测试覆盖去重、路由、入站过滤、scope 队列、bot 回路上限、主动发送的允许名单、trust 不读展示名和正文，以及微信长轮询、context token 的刷新和过期错误。没有接真实飞书、微信或 Grok Bot。

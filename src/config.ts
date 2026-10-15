@@ -1,4 +1,18 @@
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { isIlinkId } from "./send-guard.js";
+
+export interface WechatConfig {
+  credentialsFile: string;
+  /** When omitted, the channel uses ilink_user_id from the credentials file. */
+  ownerUserId?: string;
+  allow: {
+    users: string[];
+    trustedUsers: string[];
+    trustedBots: string[];
+  };
+}
 
 export interface AppConfig {
   feishu: {
@@ -7,6 +21,7 @@ export interface AppConfig {
     domain: "feishu" | "lark";
     botOpenId?: string;
   };
+  wechat?: WechatConfig;
   ownerOpenId: string;
   allow: {
     users: string[];
@@ -32,6 +47,7 @@ export interface AppConfig {
     port: number;
     token: string;
     dataDir: string;
+    wechatCredentials: string;
   };
 }
 
@@ -47,6 +63,7 @@ const TOP_KEYS = new Set([
   "deliveryTimeoutMs",
   "maxBotExchanges",
   "contextMessages",
+  "wechat",
 ]);
 
 export function loadConfig(file: string): AppConfig {
@@ -84,6 +101,8 @@ export function parseConfig(value: unknown): AppConfig {
 
   const ownerOpenId = requiredString(root.ownerOpenId, "ownerOpenId");
   if (!ownerOpenId.startsWith("ou_")) throw new Error("ownerOpenId must be an open_id (ou_)");
+
+  const wechat = root.wechat === undefined ? undefined : parseWechat(root.wechat);
 
   const allowRaw = root.allow === undefined ? {} : record(root.allow, "allow");
   unknownKeys(allowRaw, new Set(["users", "trustedUsers", "chats", "trustedBots"]), "allow");
@@ -155,6 +174,7 @@ export function parseConfig(value: unknown): AppConfig {
       domain,
       ...(botOpenId ? { botOpenId } : {}),
     },
+    ...(wechat ? { wechat } : {}),
     ownerOpenId,
     allow: { users, trustedUsers, chats, trustedBots },
     routes,
@@ -174,8 +194,57 @@ export function parseConfig(value: unknown): AppConfig {
       port,
       token: token ?? "",
       dataDir,
+      wechatCredentials: wechat?.credentialsFile ?? "",
     },
   };
+}
+
+function parseWechat(value: unknown): WechatConfig {
+  const wechat = record(value, "wechat");
+  unknownKeys(wechat, new Set(["credentialsFile", "ownerUserId", "allow"]), "wechat");
+  const credentialsFile = expandHome(
+    wechat.credentialsFile === undefined
+      ? defaultCredentialsFile()
+      : requiredString(wechat.credentialsFile, "wechat.credentialsFile"),
+  );
+  const ownerUserId = optionalString(wechat.ownerUserId, "wechat.ownerUserId");
+  if (ownerUserId && !/^[A-Za-z0-9._-]+@im\.wechat$/.test(ownerUserId)) {
+    throw new Error("wechat.ownerUserId must be an iLink user id (...@im.wechat)");
+  }
+  const allowRaw = wechat.allow === undefined ? {} : record(wechat.allow, "wechat.allow");
+  unknownKeys(allowRaw, new Set(["users", "trustedUsers", "trustedBots"]), "wechat.allow");
+  return {
+    credentialsFile,
+    ...(ownerUserId ? { ownerUserId } : {}),
+    allow: {
+      users: ilinkList(allowRaw.users, "wechat.allow.users"),
+      trustedUsers: ilinkList(allowRaw.trustedUsers, "wechat.allow.trustedUsers"),
+      trustedBots: ilinkList(allowRaw.trustedBots, "wechat.allow.trustedBots"),
+    },
+  };
+}
+
+function defaultCredentialsFile(): string {
+  const dir = process.env.WEIXIN_CLI_CONFIG_DIR || path.join(os.homedir(), ".config", "weixin-cli");
+  return path.join(dir, "credentials.json");
+}
+
+function expandHome(file: string): string {
+  if (file === "~") return os.homedir();
+  if (file.startsWith("~/")) return path.join(os.homedir(), file.slice(2));
+  return file;
+}
+
+function ilinkList(value: unknown, label: string): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  return value.map((item, index) => {
+    const id = requiredString(item, `${label}[${index}]`);
+    if (!isIlinkId(id)) {
+      throw new Error(`${label}[${index}] must be an iLink id (...@im.wechat or ...@im.bot)`);
+    }
+    return id;
+  });
 }
 
 export function sameIdentity(a: AppConfig["identity"], b: AppConfig["identity"]): boolean {
@@ -187,7 +256,8 @@ export function sameIdentity(a: AppConfig["identity"], b: AppConfig["identity"])
     a.host === b.host &&
     a.port === b.port &&
     a.token === b.token &&
-    a.dataDir === b.dataDir
+    a.dataDir === b.dataDir &&
+    a.wechatCredentials === b.wechatCredentials
   );
 }
 
